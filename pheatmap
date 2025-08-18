@@ -1,0 +1,65 @@
+# -------------------- Load packages --------------------
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Install and load pheatmap if not available
+if(!require(pheatmap)) install.packages("pheatmap"); library(pheatmap)
+
+# -------------------- Import data --------------------
+data <- read_excel("C:/Users/Bmark/Desktop/Data.xlsx")
+
+# -------------------- Clean and prepare --------------------
+# Keep only miRNAs and references
+data <- data %>% filter(!is.na(Cq))
+
+# Average replicates (Cq Mean is already present, but let’s ensure)
+data <- data %>%
+  group_by(Target, Sample, Type) %>%
+  summarise(Cq_mean = mean(Cq, na.rm=TRUE), .groups = "drop")
+
+# -------------------- Normalize (ΔCt) --------------------
+# Get reference (U6)
+ref <- data %>% filter(Target == "U6") %>%
+  select(Sample, Ref_Cq = Cq_mean)
+
+# Join reference values
+data_norm <- data %>%
+  filter(Target != "U6") %>%
+  left_join(ref, by="Sample") %>%
+  mutate(DeltaCt = Cq_mean - Ref_Cq)
+
+# -------------------- ΔΔCt and fold change --------------------
+# Separate Normal and Tumor
+normal <- data_norm %>% filter(Type == "Normal") %>%
+  group_by(Target) %>% summarise(DeltaCt_N = mean(DeltaCt), .groups="drop")
+
+tumor <- data_norm %>% filter(Type == "Tumor") %>%
+  group_by(Target) %>% summarise(DeltaCt_T = mean(DeltaCt), .groups="drop")
+
+ddct <- left_join(normal, tumor, by="Target") %>%
+  mutate(DeltaDeltaCt = DeltaCt_T - DeltaCt_N,
+         FoldChange = 2^(-DeltaDeltaCt))
+
+# -------------------- Plot 1: Bar chart --------------------
+ggplot(ddct, aes(x=Target, y=FoldChange, fill=Target)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=1, linetype="dashed") +
+  labs(title="Fold Change (Tumor vs Normal)",
+       y="Fold Change (2^-ΔΔCt)", x="miRNAs") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+
+# -------------------- Plot 2: Heatmap --------------------
+# Use ΔCt for patients
+heatmap_data <- data_norm %>%
+  select(Sample, Target, DeltaCt) %>%
+  spread(Sample, DeltaCt)
+
+mat <- as.matrix(heatmap_data[,-1])
+rownames(mat) <- heatmap_data$Target
+
+pheatmap(mat, cluster_rows=TRUE, cluster_cols=TRUE,
+         color=colorRampPalette(c("blue","white","red"))(50),
+         main="miRNA Expression Heatmap (ΔCt)")
