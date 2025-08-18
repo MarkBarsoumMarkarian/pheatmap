@@ -43,7 +43,7 @@ ddct <- left_join(normal, tumor, by="Target") %>%
          FoldChange = 2^(-DeltaDeltaCt))
 
 # -------------------- Plot 1: Bar chart --------------------
-ggplot(ddct, aes(x=Target, y=FoldChange, fill=Target)) +
+ggplot(ddct, aes(x=Target, y=log2foldchange, fill=Target)) +
   geom_bar(stat="identity") +
   geom_hline(yintercept=1, linetype="dashed") +
   labs(title="Fold Change (Tumor vs Normal)",
