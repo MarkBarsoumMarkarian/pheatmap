@@ -8,13 +8,13 @@ library(ggplot2)
 if(!require(pheatmap)) install.packages("pheatmap"); library(pheatmap)
 
 # -------------------- Import data --------------------
-data <- read_excel("C:/Users/Bmark/Desktop/Data.xlsx")
+data <- read_excel("C:/Users/Bmark/Desktop/for me.xlsx")
 
 # -------------------- Clean and prepare --------------------
-# Keep only miRNAs and references
+# Keep only miRNAs with valid Cq
 data <- data %>% filter(!is.na(Cq))
 
-# Average replicates (Cq Mean is already present, but let’s ensure)
+# Average technical replicates
 data <- data %>%
   group_by(Target, Sample, Type) %>%
   summarise(Cq_mean = mean(Cq, na.rm=TRUE), .groups = "drop")
@@ -24,32 +24,59 @@ data <- data %>%
 ref <- data %>% filter(Target == "U6") %>%
   select(Sample, Ref_Cq = Cq_mean)
 
-# Join reference values
+# Join reference values and calculate ΔCt
 data_norm <- data %>%
   filter(Target != "U6") %>%
   left_join(ref, by="Sample") %>%
   mutate(DeltaCt = Cq_mean - Ref_Cq)
 
-# -------------------- ΔΔCt and fold change --------------------
-# Separate Normal and Tumor
-normal <- data_norm %>% filter(Type == "Normal") %>%
-  group_by(Target) %>% summarise(DeltaCt_N = mean(DeltaCt), .groups="drop")
+# -------------------- ΔΔCt per patient --------------------
+# Extract patient ID from Sample name (everything except last character)
+data_norm <- data_norm %>%
+  mutate(Patient = gsub("[NT]$", "", Sample))
 
-tumor <- data_norm %>% filter(Type == "Tumor") %>%
-  group_by(Target) %>% summarise(DeltaCt_T = mean(DeltaCt), .groups="drop")
+# Spread Tumor/Normal within each patient + miRNA
+paired <- data_norm %>%
+  select(Target, Patient, Type, DeltaCt) %>%
+  spread(Type, DeltaCt)
 
-ddct <- left_join(normal, tumor, by="Target") %>%
-  mutate(DeltaDeltaCt = DeltaCt_T - DeltaCt_N,
+# Calculate ΔΔCt and Fold Change per patient
+paired <- paired %>%
+  mutate(DeltaDeltaCt = Tumor - Normal,
          FoldChange = 2^(-DeltaDeltaCt))
 
-# -------------------- Plot 1: Bar chart --------------------
-ggplot(ddct, aes(x=Target, y=log2foldchange, fill=Target)) +
+# -------------------- Summary stats --------------------
+ddct_summary <- paired %>%
+  group_by(Target) %>%
+  summarise(MeanFC = mean(FoldChange, na.rm=TRUE),
+            SD_FC = sd(FoldChange, na.rm=TRUE),
+            .groups="drop")
+
+# -------------------- Remove Unisp6 from plots --------------------
+ddct_summary_plot <- ddct_summary %>% filter(Target != "Unisp6")
+paired_plot <- paired %>% filter(Target != "Unisp6")
+
+# -------------------- Plot 1: Average Fold Change --------------------
+ggplot(ddct_summary_plot, aes(x=Target, y=MeanFC, fill=Target)) +
   geom_bar(stat="identity") +
+  geom_errorbar(aes(ymin=MeanFC - SD_FC, ymax=MeanFC + SD_FC), width=0.2) +
   geom_hline(yintercept=1, linetype="dashed") +
   labs(title="Fold Change (Tumor vs Normal)",
+       y="Mean Fold Change (2^-ΔΔCt)", x="miRNAs") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+
+# -------------------- Plot 2: Individual Fold Changes --------------------
+ggplot(paired_plot, aes(x=Target, y=FoldChange, fill=Target)) +
+  geom_boxplot(outlier.shape = NA, alpha=0.5) +
+  geom_jitter(width=0.2, size=2, aes(color=Patient)) +
+  geom_hline(yintercept=1, linetype="dashed") +
+  labs(title="Individual Fold Changes per Patient",
        y="Fold Change (2^-ΔΔCt)", x="miRNAs") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle=45, hjust=1))
+
+
 
 # -------------------- Plot 2: Heatmap --------------------
 # Use ΔCt for patients
